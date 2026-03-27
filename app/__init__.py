@@ -1,0 +1,4 @@
+"""
+Intelligent Job Application Tracker.
+"""
+

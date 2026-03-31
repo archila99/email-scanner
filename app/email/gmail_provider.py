@@ -13,7 +13,6 @@ from app.config import settings
 @dataclass(frozen=True)
 class RawEmail:
     provider_message_id: str
-    thread_id: Optional[str]
     from_address: Optional[str]
     from_domain: Optional[str]
     subject: Optional[str]
@@ -89,7 +88,6 @@ class GmailProvider:
 
         return RawEmail(
             provider_message_id=msg["id"],
-            thread_id=msg.get("threadId"),
             from_address=addr or None,
             from_domain=from_domain,
             subject=subject,

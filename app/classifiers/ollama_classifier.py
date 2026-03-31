@@ -11,51 +11,71 @@ from app.config import settings
 from app.email.preprocess import NormalizedEmail
 
 
-Category = Literal[
-    "not_job_related",
-    "application_received",
-    "rejected",
-    "interview",
-    "offer",
-    "other_job_related",
-]
+Type = Literal["application", "rejection", "interview", "offer", "other", "not_job_related"]
 
 
 @dataclass(frozen=True)
 class LLMResult:
-    is_job_related: bool
-    category: Category
+    type: Type
     company: Optional[str]
     role: Optional[str]
     confidence: float
     reason: Optional[str]
 
 
-SYSTEM_PROMPT = """You classify personal inbox emails related to job applications.
+SYSTEM_PROMPT = """You are an email classifier for job applications.
 Return ONLY valid JSON. No markdown. No extra text.
 
+Only classify emails that are specifically about the user's own job applications.
+Do NOT classify recruiter outreach, job ads, recommendations, newsletters, job alerts,
+or marketing from job websites as application emails.
+
+Classify the email into ONE of:
+- application (confirmation)
+- rejection
+- interview
+- offer
+- other
+- not_job_related
+
 Rules:
-- If the email is not about a job application or recruiting, set is_job_related=false and category="not_job_related".
-- Job-board newsletters, job recommendations, "jobs you may like", and marketing blasts are NOT job applications.
-  If it's only recommending roles and does not confirm that the user applied, set is_job_related=false.
-- If it confirms a submitted application / application was received, category="application_received".
-- If it says the candidate is not proceeding / rejected, category="rejected".
-- If it invites to interview / screening, category="interview".
-- If it contains an offer, category="offer".
-- If it's job-related but not one of the above, category="other_job_related".
+- "Unfortunately", "we regret" → rejection
+- "We would like to invite", "invite you to interview" → interview
+- "Offer" or "pleased to offer" → offer
+- "Thank you for applying", "we received your application" → application
+- If multiple phrases conflict, pick the strongest signal in this order:
+  rejection > offer > interview > application > other > not_job_related
+- Use `type="not_job_related"` for recruiter outreach, recommendations, job alerts, newsletters,
+  marketing, or any email that is not clearly about an application the user already made.
+- Extract `company` and `role` if mentioned in the subject or first paragraph of the body; otherwise return null.
+- Confidence guidance:
+  - strong explicit keyword/pattern match → 0.9 to 1.0
+  - moderate but clear evidence → 0.7 to 0.89
+  - weak inferred hints → 0.5 to 0.69
+  - clearly not application-related → 0.9 to 1.0 with `type="not_job_related"`
 
-Extract:
-- company: company name if present, else null
-- role: role/title if present, else null
+Examples of `not_job_related`:
+- "Our recommendation: ..."
+- "jobs you may like"
+- "job alert"
+- recruiter outreach with no prior application
+- training/course promotions
 
-confidence: number between 0 and 1.
+Return JSON only with keys:
+{
+  "type": "application|rejection|interview|offer|other|not_job_related",
+  "company": string or null,
+  "role": string or null,
+  "confidence": number between 0 and 1,
+  "reason": string or null
+}
 """
 
 
 def _build_user_prompt(email: NormalizedEmail) -> str:
     subject = email.subject or ""
     from_domain = email.from_domain or ""
-    body = email.body_for_detection or ""
+    body = email.body_clean or ""
     # Limit to a reasonable size to keep Ollama fast.
     body = body[:3500]
     return f"""FromDomain: {from_domain}
@@ -106,8 +126,7 @@ def classify_with_ollama(email: NormalizedEmail) -> LLMResult:
     content = ((data.get("message") or {}).get("content")) or ""
     parsed = _parse_json(content)
 
-    is_job_related = bool(parsed.get("is_job_related", False))
-    category = parsed.get("category") or ("other_job_related" if is_job_related else "not_job_related")
+    t = parsed.get("type") or "not_job_related"
     company = parsed.get("company")
     role = parsed.get("role")
     raw_conf = parsed.get("confidence", 0.5)
@@ -118,18 +137,15 @@ def classify_with_ollama(email: NormalizedEmail) -> LLMResult:
     reason = parsed.get("reason")
 
     # Coerce/guard
-    if category not in {
+    if t not in {
         "not_job_related",
-        "application_received",
-        "rejected",
+        "application",
+        "rejection",
         "interview",
         "offer",
-        "other_job_related",
+        "other",
     }:
-        category = "other_job_related" if is_job_related else "not_job_related"
-
-    if not is_job_related:
-        category = "not_job_related"
+        t = "not_job_related"
 
     if confidence < 0:
         confidence = 0.0
@@ -143,8 +159,7 @@ def classify_with_ollama(email: NormalizedEmail) -> LLMResult:
         return s or None
 
     return LLMResult(
-        is_job_related=is_job_related,
-        category=category,  # type: ignore[arg-type]
+        type=t,  # type: ignore[arg-type]
         company=_clean(company),
         role=_clean(role),
         confidence=confidence,

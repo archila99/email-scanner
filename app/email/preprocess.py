@@ -29,13 +29,12 @@ def normalize_text(text: str) -> str:
 @dataclass(frozen=True)
 class NormalizedEmail:
     provider_message_id: str
-    thread_id: str | None
     from_address: str | None
     from_domain: str | None
     subject: str | None
-    body_excerpt: str
     received_at: dt.datetime | None
-    body_for_detection: str  # normalized full text for detectors
+    body_clean: str
+    body_excerpt: str
 
 
 def preprocess_email(raw: RawEmail, body_excerpt_chars: int = 600) -> NormalizedEmail:
@@ -45,8 +44,6 @@ def preprocess_email(raw: RawEmail, body_excerpt_chars: int = 600) -> Normalized
         body = _strip_html(body)
 
     body = normalize_text(body)
-    # Gmail templates often contain HTML entities (&nbsp; etc). Decode them
-    # so regex matching for role/company works reliably.
     body = html.unescape(body)
     body_excerpt = body[:body_excerpt_chars].strip()
 
@@ -59,12 +56,11 @@ def preprocess_email(raw: RawEmail, body_excerpt_chars: int = 600) -> Normalized
 
     return NormalizedEmail(
         provider_message_id=raw.provider_message_id,
-        thread_id=raw.thread_id,
         from_address=raw.from_address,
         from_domain=raw.from_domain.lower() if raw.from_domain else None,
         subject=(raw.subject.strip() if raw.subject else None),
-        body_excerpt=body_excerpt,
         received_at=received_at,
-        body_for_detection=body,
+        body_clean=body,
+        body_excerpt=body_excerpt,
     )
 

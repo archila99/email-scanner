@@ -3,15 +3,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
-from app.automation.engine import generate_followup_due_actions
-from app.models import ApplicationEvent, TrackedApplication
+from app.models import Emails, JobApplications
 from app.schemas import (
-    ApplicationEventRead,
+    EmailRead,
     IngestRunResponse,
-    TrackedApplicationCreate,
-    TrackedApplicationRead,
+    JobApplicationRead,
 )
-from app.services.ingest_service import ingest_new_emails_once
+from app.services.ingest import ingest_new_emails_once
 
 from .deps import get_db, get_gmail_provider
 
@@ -24,26 +22,14 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.post("/applications", response_model=TrackedApplicationRead)
-def create_application(
-    payload: TrackedApplicationCreate,
-    session: Session = Depends(get_db),
-) -> TrackedApplication:
-    app = TrackedApplication(
-        company=payload.company,
-        role=payload.role,
-        company_domain=payload.company_domain,
-        resume_version_used=payload.resume_version_used,
-    )
-    session.add(app)
-    session.commit()
-    session.refresh(app)
-    return app
+@router.get("/emails", response_model=list[EmailRead])
+def list_emails(session: Session = Depends(get_db)) -> list[Emails]:
+    return session.exec(select(Emails).order_by(Emails.received_at.desc())).all()
 
 
-@router.get("/applications", response_model=list[TrackedApplicationRead])
-def list_applications(session: Session = Depends(get_db)) -> list[TrackedApplication]:
-    return session.exec(select(TrackedApplication)).all()
+@router.get("/job-applications", response_model=list[JobApplicationRead])
+def list_job_applications(session: Session = Depends(get_db)) -> list[JobApplications]:
+    return session.exec(select(JobApplications).order_by(JobApplications.created_at.desc())).all()
 
 
 @router.post("/ingest/run", response_model=IngestRunResponse)
@@ -60,13 +46,4 @@ def ingest_run(
         max_results=settings.gmail_max_results_per_poll,
     )
     return res
-
-
-@router.get("/automation/actions", response_model=list[ApplicationEventRead])
-def automation_actions(session: Session = Depends(get_db)) -> list[ApplicationEvent]:
-    # Generate events for follow-ups due; return newly created + existing followup_due events.
-    generate_followup_due_actions(session)
-    return session.exec(
-        select(ApplicationEvent).where(ApplicationEvent.event_type == "followup_due").order_by(ApplicationEvent.occurred_at.desc())
-    ).all()
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse, Response
 
@@ -8,12 +10,18 @@ from app.api.routes import router as api_router
 from app.config import settings
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="Gmail Scanner", debug=settings.debug)
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    init_db()
+    yield
 
-    @app.on_event("startup")
-    def _startup() -> None:
-        init_db()
+
+def create_app() -> FastAPI:
+    app = FastAPI(
+        title="Gmail Scanner",
+        debug=settings.debug,
+        lifespan=_lifespan,
+    )
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:

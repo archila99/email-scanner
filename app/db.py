@@ -10,6 +10,11 @@ def init_db() -> None:
     # Ensure models are imported so SQLModel registers tables.
     import app.models  # noqa: F401
 
+    # When sqlite files are deleted/recreated during local development,
+    # stale pooled connections can point at the old file handle and fail writes.
+    engine.dispose()
+    if settings.reset_db_on_start:
+        SQLModel.metadata.drop_all(engine)
     SQLModel.metadata.create_all(engine)
 
 

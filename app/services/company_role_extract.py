@@ -10,6 +10,7 @@ from app.classifiers.ollama_company_extractor import extract_company_with_ollama
 from app.email.preprocess import NormalizedEmail
 from app.models import Emails
 from app.services.company_normalize import guess_company_from_domain, normalize_company_name
+from app.services.llm_cache import cache_get
 
 
 def _is_blank(s: Optional[str]) -> bool:
@@ -237,15 +238,49 @@ def extract_company_role(
     allow_llm_company: bool = True,
     allow_llm_role: bool = True,
 ) -> ExtractCompanyRoleResult:
-    c = extract_company(email, allow_llm=allow_llm_company)
-    r = extract_role(email, allow_llm=allow_llm_role)
-    # Conservative combined confidence: take max of the two signals.
-    confidence = max(float(c.confidence or 0.0), float(r.confidence or 0.0))
+    # Heuristics first (no LLM) so we only pay for LLM when needed.
+    c = extract_company(email, allow_llm=False)
+    r = extract_role(email, allow_llm=False)
+
+    need_company_llm = allow_llm_company and settings.use_llm and (c.company is None or str(c.company).strip() == "")
+    need_role_llm = allow_llm_role and settings.use_llm and (r.role is None or str(r.role).strip() == "")
+
+    llm_company: Optional[str] = None
+    llm_role: Optional[str] = None
+    llm_conf: float = 0.0
+
+    if need_company_llm or need_role_llm:
+        # Prefer reusing a classification LLM result from this run if available.
+        key = f"provider:{email.raw_data}" if email.raw_data else None
+        cached = cache_get(key) if key else None
+        if cached and (cached.company or cached.role):
+            llm_company = cached.company
+            llm_role = cached.role
+            llm_conf = float(cached.confidence or 0.0)
+        else:
+            llm = extract_company_with_ollama(normalized_from_email_row(email))
+            llm_company = llm.company
+            llm_role = llm.role
+            llm_conf = float(llm.confidence or 0.0)
+
+    company = c.company
+    company_method = c.method
+    if need_company_llm and llm_company and llm_conf >= 0.55:
+        company = normalize_company_name(llm_company)
+        company_method = "llm"
+
+    role = r.role
+    role_method = r.method
+    if need_role_llm and llm_role and llm_conf >= 0.55:
+        role = _clean_fragment(llm_role)
+        role_method = "llm"
+
+    confidence = max(float(c.confidence or 0.0), float(r.confidence or 0.0), float(llm_conf or 0.0))
     return ExtractCompanyRoleResult(
-        company=c.company,
-        role=r.role,
-        company_method=c.method,
-        role_method=r.method,
+        company=company,
+        role=role,
+        company_method=company_method if company else "none",
+        role_method=role_method if role else "none",
         confidence=confidence,
     )
 

@@ -138,6 +138,10 @@ def backfill_job_application_company_role(session: Session) -> BackfillStats:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     with Session(engine) as session:
+        # Ensure per-run counters/cache are isolated for this CLI execution.
+        from app.services.llm_cache import reset_cache
+
+        reset_cache()
         backfill_job_application_company_role(session)
 
 

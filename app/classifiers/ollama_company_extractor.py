@@ -5,10 +5,9 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
-import httpx
-
 from app.config import settings
 from app.email.preprocess import NormalizedEmail
+from app.services.ollama_executor import run_ollama_safe
 
 
 @dataclass(frozen=True)
@@ -79,10 +78,7 @@ def extract_company_with_ollama(email: NormalizedEmail) -> CompanyExtractResult:
         "stream": False,
     }
 
-    with httpx.Client(timeout=30.0) as client:
-        resp = client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+    data = run_ollama_safe(url=url, payload=payload, tag="extract_company_role")
 
     content = ((data.get("message") or {}).get("content")) or ""
     parsed = _parse_json(content)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import datetime as dt
+import time
 from typing import Any, Optional
 
 from sqlmodel import Session, select
@@ -13,6 +14,7 @@ from app.email.gmail_provider import GmailProvider
 from app.email.preprocess import preprocess_email
 from app.models import Emails, JobApplications
 from app.services.entity_resolver import resolve_job_application_nonblocking
+from app.services.llm_cache import get_ollama_call_count, reset_cache
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,8 @@ def ingest_new_emails_once(
     max_results: int,
     subject_confidence_threshold: float = 0.85,
 ) -> dict[str, Any]:
+    reset_cache()
+    started = time.perf_counter()
     # Goal: ingest up to `max_results` *new* emails per run.
     # Gmail returns newest-first; if we only fetch the first page, repeated runs keep seeing
     # the same newest results and won't reach older emails within the same search window.
@@ -165,6 +169,7 @@ def ingest_new_emails_once(
                 logger.info(f"[TRACKING] created JobApplications for email_id={email_row.id}")
             else:
                 llm = classify_with_ollama(normalized)
+                logger.info("[LLM] classification_used=True email_message_id=%s", message_id)
                 # Keep only job-related types; ignore other/not_job_related for now.
                 t = llm.type if llm.type in ("application", "rejection", "interview", "offer") else None
 
@@ -194,4 +199,13 @@ def ingest_new_emails_once(
         ingested_count += 1
         processed.append(message_id)
 
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    ollama_calls = get_ollama_call_count()
+    logger.info(
+        "[INGEST] done ingested=%s classified=%s ollama_calls=%s elapsed_ms=%.0f",
+        ingested_count,
+        classified_count,
+        ollama_calls,
+        elapsed_ms,
+    )
     return {"processed_message_ids": processed, "ingested_count": ingested_count, "classified_count": classified_count}

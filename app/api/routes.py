@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
@@ -12,11 +13,13 @@ from app.schemas import (
     JobApplicationRead,
 )
 from app.services.ingest import ingest_new_emails_once
+from app.services.execution_guard import ingestion_lock
 
 from .deps import get_db, get_gmail_provider
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
@@ -51,11 +54,19 @@ def ingest_run(
 ) -> dict:
     from app.config import settings
 
-    res = ingest_new_emails_once(
-        session,
-        provider,
-        query=settings.gmail_search_query,
-        max_results=settings.gmail_max_results_per_poll,
-    )
-    return res
+    lock = ingestion_lock()
+    if not lock.acquire(blocking=False):
+        logger.warning("[INGEST] busy: another ingestion is running")
+        return {"processed_message_ids": [], "ingested_count": 0, "classified_count": 0}
+
+    try:
+        res = ingest_new_emails_once(
+            session,
+            provider,
+            query=settings.gmail_search_query,
+            max_results=settings.gmail_max_results_per_poll,
+        )
+        return res
+    finally:
+        lock.release()
 

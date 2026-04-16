@@ -20,10 +20,11 @@ Recruiter outreach, job alerts, recommendations, newsletters, and marketing emai
 5. If still unclear, use Ollama as a final fallback.
 6. Store every imported email in `Emails`.
 7. Create a `JobApplications` row only when the email is one of the tracked application states.
+8. Group application events into `JobApplicationEntities` (company-level grouping) and link emails via `JobApplicationEntityEmails`.
 
 ## Database schema
 
-The app currently uses only 2 tables:
+The app uses 4 tables:
 
 - `Emails`
   - raw imported emails
@@ -31,6 +32,11 @@ The app currently uses only 2 tables:
 - `JobApplications`
   - created only for `application`, `rejection`, `interview`, or `offer`
   - linked back to `Emails` through `email_id`
+- `JobApplicationEntities`
+  - grouped “application entities” per company (and optional role)
+  - stores aggregate status + dates (`first_email_date`, `last_email_date`)
+- `JobApplicationEntityEmails`
+  - link table (`entity_id`, `email_id`) connecting imported emails to grouped entities
 
 If `Emails.classification` is `null`, that means the email was imported but not considered one of the tracked application states.
 
@@ -39,9 +45,22 @@ If `Emails.classification` is `null`, that means the email was imported but not 
 - `GET /health`
 - `GET /emails`
 - `GET /job-applications`
+- `GET /job-application-entities`
+- `GET /job-application-entity-emails`
 - `POST /ingest/run`
 
 Open `http://127.0.0.1:8000/docs` for Swagger UI.
+
+## Performance + safety guards
+
+- **Global ingestion lock**: only one `POST /ingest/run` runs at a time. If another ingest is running, the endpoint returns a “busy” response with zeros.
+- **Global Ollama single-flight**: all Ollama calls are serialized (max 1 at a time) to avoid overheating / fan spikes during large ingests.
+- **In-run memoization**: if an email already used Ollama during classification, entity extraction will reuse that result when possible.
+
+Locks are file-based and live in `/tmp` (local machine only):
+
+- `/tmp/gmail_scanner_ingest.lock`
+- `/tmp/gmail_scanner_ollama.lock`
 
 ## Setup
 
@@ -119,6 +138,14 @@ Optional app behavior:
 
 - `RESET_DB_ON_START=true` will drop and recreate tables on app startup.
 - Leave it `false` for normal usage.
+
+## Backfill (improve old NULL company/role)
+
+If your `JobApplications.matched_company` / `matched_role` fields have many `null` values, you can safely enrich historical rows (fills only missing values):
+
+```bash
+./.venv/bin/python -m app.services.backfill_company_role
+```
 
 ## Notes
 

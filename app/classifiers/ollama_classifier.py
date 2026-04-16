@@ -5,10 +5,10 @@ from dataclasses import dataclass
 import re
 from typing import Any, Literal, Optional
 
-import httpx
-
 from app.config import settings
 from app.email.preprocess import NormalizedEmail
+from app.services.llm_cache import CachedLLM, cache_put
+from app.services.ollama_executor import run_ollama_safe
 
 
 Type = Literal["application", "rejection", "interview", "offer", "other", "not_job_related"]
@@ -118,10 +118,7 @@ def classify_with_ollama(email: NormalizedEmail) -> LLMResult:
         "stream": False,
     }
 
-    with httpx.Client(timeout=30.0) as client:
-        resp = client.post(url, json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+    data = run_ollama_safe(url=url, payload=payload, tag="classify")
 
     content = ((data.get("message") or {}).get("content")) or ""
     parsed = _parse_json(content)
@@ -158,11 +155,31 @@ def classify_with_ollama(email: NormalizedEmail) -> LLMResult:
         s = s.strip()
         return s or None
 
-    return LLMResult(
+    res = LLMResult(
         type=t,  # type: ignore[arg-type]
         company=_clean(company),
         role=_clean(role),
         confidence=confidence,
         reason=_clean(reason),
     )
+    try:
+        cache_put(
+            _cache_key(email),
+            CachedLLM(
+                kind="classification",
+                company=res.company,
+                role=res.role,
+                confidence=res.confidence,
+                raw={"type": res.type, "company": res.company, "role": res.role, "confidence": res.confidence},
+            ),
+        )
+    except Exception:
+        pass
+    return res
+
+
+def _cache_key(email: NormalizedEmail) -> str:
+    # Prefer stable provider id when present.
+    return f"provider:{email.provider_message_id}"
+
 

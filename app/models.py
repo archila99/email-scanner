@@ -36,3 +36,37 @@ class JobApplications(SQLModel, table=True):
     matched_company: Optional[str] = None
 
     created_at: dt.datetime = Field(default_factory=_utc_now, index=True)
+
+
+class JobApplicationEntities(SQLModel, table=True):
+    """
+    Grouped job application "entity" (per employer/role), derived from events in JobApplications.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    company_name: str = Field(index=True)
+    company_domain: Optional[str] = Field(default=None, index=True)
+    role: Optional[str] = Field(default=None, index=True)
+
+    # applied | interviewing | offered | rejected | unknown
+    status: str = Field(default="applied", index=True)
+
+    email_count: int = Field(default=0, index=True)
+    confidence_score: Optional[float] = Field(default=None)
+
+    # rule_based | ml | llm
+    created_by: str = Field(default="rule_based", index=True)
+
+    last_event_type: Optional[str] = Field(default=None, index=True)
+
+    first_email_date: dt.datetime = Field(index=True)
+    last_email_date: dt.datetime = Field(index=True)
+
+    created_at: dt.datetime = Field(default_factory=_utc_now, index=True)
+    last_updated_at: dt.datetime = Field(default_factory=_utc_now, index=True)
+
+
+class JobApplicationEntityEmails(SQLModel, table=True):
+    entity_id: int = Field(foreign_key="jobapplicationentities.id", primary_key=True)
+    email_id: int = Field(foreign_key="emails.id", primary_key=True)

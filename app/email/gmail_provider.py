@@ -55,15 +55,23 @@ class GmailProvider:
     def __init__(self, service: Resource):
         self._service = service
 
-    def list_message_ids(self, query: str, max_results: int) -> list[str]:
-        res = (
-            self._service.users()
-            .messages()
-            .list(userId=settings.gmail_user_id, q=query, maxResults=max_results)
-            .execute()
+    def list_message_ids_page(
+        self,
+        *,
+        query: str,
+        max_results: int,
+        page_token: str | None = None,
+    ) -> tuple[list[str], str | None]:
+        req = self._service.users().messages().list(
+            userId=settings.gmail_user_id,
+            q=query,
+            maxResults=max_results,
+            pageToken=page_token,
         )
+        res = req.execute()
         messages = res.get("messages") or []
-        return [m["id"] for m in messages if "id" in m]
+        ids = [m["id"] for m in messages if "id" in m]
+        return ids, res.get("nextPageToken")
 
     def get_message(self, message_id: str) -> RawEmail:
         msg = (

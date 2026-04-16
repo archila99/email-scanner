@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -41,8 +42,20 @@ def build_gmail_service():
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError:
+                # Token is revoked/expired/invalid (common: invalid_grant).
+                # Recover by deleting token and re-running installed app flow.
+                try:
+                    token_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                creds = None
         else:
+            creds = None
+
+        if not creds:
             flow = InstalledAppFlow.from_client_secrets_file(str(client_secret), _get_scopes())
             creds = flow.run_local_server(port=0)
 

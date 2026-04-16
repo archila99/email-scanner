@@ -12,6 +12,7 @@ from app.classifiers.subject_classifier import classify_from_subject
 from app.email.gmail_provider import GmailProvider
 from app.email.preprocess import preprocess_email
 from app.models import Emails, JobApplications
+from app.services.entity_resolver import resolve_job_application_nonblocking
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,25 @@ def ingest_new_emails_once(
     max_results: int,
     subject_confidence_threshold: float = 0.85,
 ) -> dict[str, Any]:
-    message_ids = provider.list_message_ids(query=query, max_results=max_results)
+    # Goal: ingest up to `max_results` *new* emails per run.
+    # Gmail returns newest-first; if we only fetch the first page, repeated runs keep seeing
+    # the same newest results and won't reach older emails within the same search window.
+    target_new = max_results
+
+    message_ids: list[str] = []
+    page_token: str | None = None
+    max_pages = 20  # safety cap per run
+    for _ in range(max_pages):
+        ids, page_token = provider.list_message_ids_page(
+            query=query,
+            max_results=max_results,
+            page_token=page_token,
+        )
+        if not ids:
+            break
+        message_ids.extend(ids)
+        if not page_token:
+            break
     processed: list[str] = []
 
     if not message_ids:
@@ -65,6 +84,8 @@ def ingest_new_emails_once(
     classified_count = 0
 
     for message_id in message_ids:
+        if ingested_count >= target_new:
+            break
         # Prevent duplicate import (raw Gmail id is stable).
         exists = session.exec(select(Emails).where(Emails.raw_data == message_id)).first()
         if exists:
@@ -96,15 +117,19 @@ def ingest_new_emails_once(
             session.refresh(email_row)
 
             company, role = _parse_company_role_from_subject(email_row.subject)
-            session.add(
-                JobApplications(
-                    email_id=email_row.id,  # type: ignore[arg-type]
-                    type=subj.type,
-                    matched_company=company,
-                    matched_role=role,
-                )
+            ja = JobApplications(
+                email_id=email_row.id,  # type: ignore[arg-type]
+                type=subj.type,
+                matched_company=company,
+                matched_role=role,
             )
+            session.add(ja)
             session.commit()
+            session.refresh(ja)
+            try:
+                resolve_job_application_nonblocking(session, ja)
+            except Exception:
+                logger.exception("[ENTITY] nonblocking resolve raised unexpectedly job_application_id=%s", ja.id)
             classified_count += 1
 
             logger.info(f"[SUBJECT HIT] {email_row.subject} -> {subj.type} ({subj.confidence:.2f})")
@@ -122,15 +147,19 @@ def ingest_new_emails_once(
                 session.add(email_row)
                 session.commit()
 
-                session.add(
-                    JobApplications(
-                        email_id=email_row.id,  # type: ignore[arg-type]
-                        type=t,  # type: ignore[arg-type]
-                        matched_company=company,
-                        matched_role=role,
-                    )
+                ja = JobApplications(
+                    email_id=email_row.id,  # type: ignore[arg-type]
+                    type=t,  # type: ignore[arg-type]
+                    matched_company=company,
+                    matched_role=role,
                 )
+                session.add(ja)
                 session.commit()
+                session.refresh(ja)
+                try:
+                    resolve_job_application_nonblocking(session, ja)
+                except Exception:
+                    logger.exception("[ENTITY] nonblocking resolve raised unexpectedly job_application_id=%s", ja.id)
                 classified_count += 1
                 logger.info(f"[BODY HIT] {email_row.subject} -> {t} ({body_hit.confidence:.2f})")
                 logger.info(f"[TRACKING] created JobApplications for email_id={email_row.id}")
@@ -144,15 +173,19 @@ def ingest_new_emails_once(
                     session.add(email_row)
                     session.commit()
 
-                    session.add(
-                        JobApplications(
-                            email_id=email_row.id,  # type: ignore[arg-type]
-                            type=t,  # type: ignore[arg-type]
-                            matched_company=llm.company,
-                            matched_role=llm.role,
-                        )
+                    ja = JobApplications(
+                        email_id=email_row.id,  # type: ignore[arg-type]
+                        type=t,  # type: ignore[arg-type]
+                        matched_company=llm.company,
+                        matched_role=llm.role,
                     )
+                    session.add(ja)
                     session.commit()
+                    session.refresh(ja)
+                    try:
+                        resolve_job_application_nonblocking(session, ja)
+                    except Exception:
+                        logger.exception("[ENTITY] nonblocking resolve raised unexpectedly job_application_id=%s", ja.id)
                     classified_count += 1
 
                 logger.info(f"[LLM USED] {email_row.subject} -> {t or 'not_job_related'} ({llm.confidence:.2f})")

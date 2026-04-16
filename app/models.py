@@ -70,3 +70,18 @@ class JobApplicationEntities(SQLModel, table=True):
 class JobApplicationEntityEmails(SQLModel, table=True):
     entity_id: int = Field(foreign_key="jobapplicationentities.id", primary_key=True)
     email_id: int = Field(foreign_key="emails.id", primary_key=True)
+
+
+class Reminders(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    entity_id: int = Field(foreign_key="jobapplicationentities.id", index=True)
+
+    # followup (extensible later)
+    type: str = Field(default="followup", index=True)
+    due_date: dt.datetime = Field(index=True)
+
+    # pending | done
+    status: str = Field(default="pending", index=True)
+    generated_text: Optional[str] = None
+
+    created_at: dt.datetime = Field(default_factory=_utc_now, index=True)

@@ -4,16 +4,22 @@ import logging
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
-from app.models import Emails, JobApplicationEntities, JobApplicationEntityEmails, JobApplications
+from app.models import Emails, JobApplicationEntities, JobApplicationEntityEmails, JobApplications, Reminders
 from app.schemas import (
+    AgentResultRead,
+    DashboardSummary,
     EmailRead,
     IngestRunResponse,
     JobApplicationEntityEmailRead,
     JobApplicationEntityRead,
     JobApplicationRead,
+    ReminderRead,
 )
 from app.services.ingest import ingest_new_emails_once
 from app.services.execution_guard import ingestion_lock
+from app.agents.followup_agent import run_followup_agent
+from app.agents.summary_agent import get_dashboard_summary
+from app.agents.sync_agent import run_sync_agent
 
 from .deps import get_db, get_gmail_provider
 
@@ -69,4 +75,38 @@ def ingest_run(
         return res
     finally:
         lock.release()
+
+
+@router.get("/agents/status")
+def agents_status() -> dict[str, bool]:
+    lock = ingestion_lock()
+    acquired = lock.acquire(blocking=False)
+    if acquired:
+        lock.release()
+    return {"ingest_busy": not acquired}
+
+
+@router.post("/agents/sync/run", response_model=AgentResultRead)
+def agents_sync_run(
+    session: Session = Depends(get_db),
+    provider=Depends(get_gmail_provider),
+) -> dict:
+    res = run_sync_agent(session=session, provider=provider)
+    return res.__dict__
+
+
+@router.post("/agents/followup/run", response_model=AgentResultRead)
+def agents_followup_run(session: Session = Depends(get_db)) -> dict:
+    res = run_followup_agent(session=session)
+    return res.__dict__
+
+
+@router.get("/dashboard/summary", response_model=DashboardSummary)
+def dashboard_summary(session: Session = Depends(get_db)) -> dict:
+    return get_dashboard_summary(session=session)
+
+
+@router.get("/reminders", response_model=list[ReminderRead])
+def list_reminders(session: Session = Depends(get_db)) -> list[Reminders]:
+    return session.exec(select(Reminders).order_by(Reminders.created_at.desc())).all()
 

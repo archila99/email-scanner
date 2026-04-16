@@ -61,3 +61,32 @@ class JobApplicationEntityEmailRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+
+class ReminderRead(BaseModel):
+    id: int
+    entity_id: int
+    type: str
+    due_date: dt.datetime
+    status: str
+    generated_text: Optional[str] = None
+    created_at: dt.datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgentResultRead(BaseModel):
+    ok: bool
+    agent: str
+    started_at: dt.datetime
+    finished_at: dt.datetime
+    details: dict
+    error: Optional[str] = None
+
+
+class DashboardSummary(BaseModel):
+    generated_at: dt.datetime
+    new_emails_today: int
+    active_applications: int
+    followups_pending: int
+    interviewing: int
+
